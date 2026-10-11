@@ -16,12 +16,15 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/auth")
 public class AuthController {
   private final AccountRepository accounts;
+  private final AccountPhotoRepository photos;
   private final PasswordEncoder passwords;
   private final JwtEncoder encoder;
   private final String dummyHash;
 
-  public AuthController(AccountRepository a, PasswordEncoder p, JwtEncoder e) {
+  public AuthController(
+      AccountRepository a, PasswordEncoder p, JwtEncoder e, AccountPhotoRepository photos) {
     accounts = a;
+    this.photos = photos;
     passwords = p;
     encoder = e;
     dummyHash = passwords.encode(UUID.randomUUID().toString());
@@ -71,7 +74,11 @@ public class AuthController {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)));
   }
 
-  public record ProfileInput(@NotBlank @Size(max = 100) String name) {}
+  public record ProfileInput(
+      @NotBlank @Size(max = 100) String name,
+      @Size(max = 30) @Pattern(regexp = "[+0-9 ()-]*") String phone,
+      @Size(max = 100) String location,
+      @Size(max = 500) String bio) {}
 
   public record PasswordInput(
       @NotBlank @Size(max = 72) String currentPassword,
@@ -86,6 +93,9 @@ public class AuthController {
             .lockById(Long.valueOf(jwt.getSubject()))
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
     account.name = input.name().trim();
+    account.phone = clean(input.phone());
+    account.location = clean(input.location());
+    account.bio = clean(input.bio());
     return profile(accounts.saveAndFlush(account));
   }
 
@@ -113,8 +123,26 @@ public class AuthController {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password exceeds 72 UTF-8 bytes");
   }
 
+  private String clean(String value) {
+    return value == null ? "" : value.trim();
+  }
+
   private Map<String, Object> profile(Account a) {
-    return Map.of("id", a.id, "name", a.name, "email", a.email);
+    return Map.of(
+        "id",
+        a.id,
+        "name",
+        a.name,
+        "email",
+        a.email,
+        "phone",
+        clean(a.phone),
+        "location",
+        clean(a.location),
+        "bio",
+        clean(a.bio),
+        "hasPhoto",
+        photos.existsById(a.id));
   }
 
   private Map<String, Object> session(Account a) {

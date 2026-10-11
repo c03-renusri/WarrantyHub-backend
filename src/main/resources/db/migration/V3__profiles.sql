@@ -1,0 +1,8 @@
+ALTER TABLE accounts ADD COLUMN phone VARCHAR(30);
+ALTER TABLE accounts ADD COLUMN location VARCHAR(100);
+ALTER TABLE accounts ADD COLUMN bio VARCHAR(500);
+CREATE TABLE account_photos (
+ account_id BIGINT PRIMARY KEY,
+ content MEDIUMBLOB NOT NULL,
+ CONSTRAINT fk_photo_account FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);

@@ -20,4 +20,13 @@ public class Account {
 
   @Column(nullable = false)
   public long tokenVersion;
+
+  @Column(length = 30)
+  public String phone;
+
+  @Column(length = 100)
+  public String location;
+
+  @Column(length = 500)
+  public String bio;
 }

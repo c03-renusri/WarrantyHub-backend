@@ -500,4 +500,103 @@ class VaultIntegrationTest {
     assertEquals("EXPIRING", WarrantyDates.status(today.plusDays(30), today));
     assertEquals("ACTIVE", WarrantyDates.status(today.plusDays(31), today));
   }
+
+  @Test
+  void profileDetailsAndPhotoStayPrivateAndValidateImages() throws Exception {
+    String token = register();
+    mvc.perform(
+            put("/api/auth/me")
+                .header("Authorization", "Bearer " + token)
+                .contentType("application/json")
+                .content(
+                    "{\"name\":\"Photo owner\",\"phone\":\"+91 98765"
+                        + " 43210\",\"location\":\"Chennai\",\"bio\":\"My home essentials\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.location").value("Chennai"));
+    mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+        .andExpect(jsonPath("$.phone").value("+91 98765 43210"))
+        .andExpect(jsonPath("$.bio").value("My home essentials"));
+    var image = new java.awt.image.BufferedImage(64, 48, java.awt.image.BufferedImage.TYPE_INT_RGB);
+    var bytes = new java.io.ByteArrayOutputStream();
+    javax.imageio.ImageIO.write(image, "png", bytes);
+    mvc.perform(
+            multipart("/api/auth/me/photo")
+                .file(new MockMultipartFile("file", "photo.png", "image/png", bytes.toByteArray()))
+                .with(
+                    req -> {
+                      req.setMethod("PUT");
+                      return req;
+                    })
+                .header("Authorization", "Bearer " + token))
+        .andExpect(status().isNoContent());
+    mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+        .andExpect(jsonPath("$.hasPhoto").value(true));
+    byte[] result =
+        mvc.perform(get("/api/auth/me/photo").header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType("image/jpeg"))
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andReturn()
+            .getResponse()
+            .getContentAsByteArray();
+    var decoded = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(result));
+    assertEquals(48, decoded.getWidth());
+    assertEquals(48, decoded.getHeight());
+    mvc.perform(get("/api/auth/me/photo")).andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/auth/me/photo").header("Authorization", "Bearer " + register()))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            multipart("/api/auth/me/photo")
+                .file(
+                    new MockMultipartFile(
+                        "file",
+                        "fake.png",
+                        "image/png",
+                        new byte[] {(byte) 137, 80, 78, 71, 0, 0, 0, 0}))
+                .with(
+                    req -> {
+                      req.setMethod("PUT");
+                      return req;
+                    })
+                .header("Authorization", "Bearer " + token))
+        .andExpect(status().isUnsupportedMediaType());
+    mvc.perform(
+            multipart("/api/auth/me/photo")
+                .file(
+                    new MockMultipartFile(
+                        "file", "large.png", "image/png", new byte[2 * 1024 * 1024 + 1]))
+                .with(
+                    req -> {
+                      req.setMethod("PUT");
+                      return req;
+                    })
+                .header("Authorization", "Bearer " + token))
+        .andExpect(status().isBadRequest());
+    byte[] hugeDimensions = bytes.toByteArray();
+    java.nio.ByteBuffer.wrap(hugeDimensions).putInt(16, 8001);
+    var crc = new java.util.zip.CRC32();
+    crc.update(hugeDimensions, 12, 17);
+    java.nio.ByteBuffer.wrap(hugeDimensions).putInt(29, (int) crc.getValue());
+    mvc.perform(
+            multipart("/api/auth/me/photo")
+                .file(new MockMultipartFile("file", "wide.png", "image/png", hugeDimensions))
+                .with(
+                    req -> {
+                      req.setMethod("PUT");
+                      return req;
+                    })
+                .header("Authorization", "Bearer " + token))
+        .andExpect(status().isBadRequest());
+    assertArrayEquals(
+        result,
+        mvc.perform(get("/api/auth/me/photo").header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsByteArray());
+    mvc.perform(delete("/api/auth/me/photo").header("Authorization", "Bearer " + token))
+        .andExpect(status().isNoContent());
+    mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+        .andExpect(jsonPath("$.hasPhoto").value(false));
+  }
 }
