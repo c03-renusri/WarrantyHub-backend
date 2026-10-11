@@ -11,6 +11,9 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -26,6 +29,17 @@ import org.springframework.test.web.servlet.MockMvc;
 class VaultIntegrationTest {
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper json;
+  @Autowired Clock clock;
+
+  @TestConfiguration
+  static class TestTime {
+    @Bean
+    @Primary
+    Clock testClock() {
+      // Freeze time so the rate-limit test cannot cross a minute boundary.
+      return Clock.fixed(Instant.now(), ZoneId.of("Asia/Kolkata"));
+    }
+  }
 
   String register() throws Exception {
     String email = UUID.randomUUID() + "@example.com";
@@ -224,7 +238,7 @@ class VaultIntegrationTest {
                 .content(json.writeValueAsString(p)))
         .andExpect(status().isBadRequest());
     p.put("price", 1);
-    p.put("purchaseDate", LocalDate.now().plusYears(1).toString());
+    p.put("purchaseDate", LocalDate.now(clock).plusYears(1).toString());
     mvc.perform(
             post("/api/products")
                 .header("Authorization", "Bearer " + t)
@@ -309,7 +323,7 @@ class VaultIntegrationTest {
   void remindersReflectExpiry() throws Exception {
     String t = register();
     var p = product();
-    p.put("purchaseDate", LocalDate.now(ZoneId.of("Asia/Kolkata")).toString());
+    p.put("purchaseDate", LocalDate.now(clock).toString());
     p.put("warrantyMonths", 0);
     mvc.perform(
             post("/api/products")
