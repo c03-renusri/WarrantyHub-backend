@@ -33,6 +33,12 @@ public class ApiErrors {
     return ResponseEntity.status(413).body(Map.of("message", "Maximum receipt size is 5 MB"));
   }
 
+  @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+  ResponseEntity<?> malformed() {
+    return ResponseEntity.badRequest()
+        .body(Map.of("message", "Check your dates and numeric fields and try again"));
+  }
+
   @ExceptionHandler(DataIntegrityViolationException.class)
   ResponseEntity<?> conflict() {
     return ResponseEntity.status(409)

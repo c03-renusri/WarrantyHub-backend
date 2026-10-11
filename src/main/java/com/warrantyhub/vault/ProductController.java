@@ -48,6 +48,10 @@ public class ProductController {
   }
 
   Map<String, Object> view(Product p) {
+    return view(p, receipts.existsById(p.id));
+  }
+
+  Map<String, Object> view(Product p, boolean hasReceipt) {
     var expiry = WarrantyDates.expiry(p.purchaseDate, p.warrantyMonths);
     var today = LocalDate.now(clock);
     Map<String, Object> m = new LinkedHashMap<>();
@@ -62,7 +66,7 @@ public class ProductController {
     m.put("expiryDate", expiry);
     m.put("daysLeft", WarrantyDates.days(expiry, today));
     m.put("status", WarrantyDates.status(expiry, today));
-    m.put("hasReceipt", receipts.existsById(p.id));
+    m.put("hasReceipt", hasReceipt);
     return m;
   }
 
@@ -74,15 +78,20 @@ public class ProductController {
       @RequestParam(defaultValue = "") String status) {
     if (!status.isEmpty() && !Set.of("ACTIVE", "EXPIRING", "EXPIRED").contains(status))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid warranty status");
-    String query = q.toLowerCase(Locale.ROOT);
-    return products.findByOwnerIdOrderByPurchaseDateDesc(Long.valueOf(jwt.getSubject())).stream()
+    String query = q.trim().toLowerCase(Locale.ROOT);
+    var owned = products.findByOwnerIdOrderByPurchaseDateDesc(Long.valueOf(jwt.getSubject()));
+    var receiptIds =
+        owned.isEmpty()
+            ? Set.<Long>of()
+            : receipts.receiptIds(owned.stream().map(p -> p.id).toList());
+    return owned.stream()
         .filter(
             p ->
                 (p.productName + " " + p.brand + " " + p.category + " " + p.store)
                     .toLowerCase(Locale.ROOT)
                     .contains(query))
         .filter(p -> category.isEmpty() || p.category.equalsIgnoreCase(category))
-        .map(this::view)
+        .map(p -> view(p, receiptIds.contains(p.id)))
         .filter(p -> status.isEmpty() || p.get("status").equals(status))
         .toList();
   }
@@ -133,6 +142,12 @@ public class ProductController {
     BigDecimal total =
         all.stream().map(p -> (BigDecimal) p.get("price")).reduce(BigDecimal.ZERO, BigDecimal::add);
     return Map.of(
+        "categories",
+        all.stream()
+            .map(p -> (String) p.get("category"))
+            .distinct()
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList(),
         "totalProducts",
         all.size(),
         "totalSpent",

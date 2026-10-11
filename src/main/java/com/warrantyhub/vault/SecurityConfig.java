@@ -36,9 +36,25 @@ public class SecurityConfig {
   }
 
   @Bean
-  JwtDecoder jwtDecoder(SecretKeySpec key) {
+  JwtDecoder jwtDecoder(SecretKeySpec key, AccountRepository accounts) {
     var decoder = NimbusJwtDecoder.withSecretKey(key).macAlgorithm(MacAlgorithm.HS256).build();
-    decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer("warrantyhub-vault"));
+    org.springframework.security.oauth2.core.OAuth2TokenValidator<Jwt> accountValidator =
+        jwt -> {
+          try {
+            Object claim = jwt.getClaim("version");
+            long version = claim == null ? 0 : ((Number) claim).longValue();
+            var account = accounts.findById(Long.valueOf(jwt.getSubject()));
+            if (account.isPresent() && account.get().tokenVersion == version)
+              return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.success();
+          } catch (IllegalArgumentException | ClassCastException ignored) {
+          }
+          return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.failure(
+              new org.springframework.security.oauth2.core.OAuth2Error(
+                  "invalid_token", "Session is no longer valid", null));
+        };
+    decoder.setJwtValidator(
+        new org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator<>(
+            JwtValidators.createDefaultWithIssuer("warrantyhub-vault"), accountValidator));
     return decoder;
   }
 
@@ -58,6 +74,14 @@ public class SecurityConfig {
   SecurityFilterChain security(HttpSecurity http, CorsConfigurationSource cors) throws Exception {
     return http.cors(c -> c.configurationSource(cors))
         .csrf(c -> c.disable())
+        .headers(
+            h ->
+                h.contentTypeOptions(c -> {})
+                    .referrerPolicy(
+                        r ->
+                            r.policy(
+                                org.springframework.security.web.header.writers
+                                    .ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)))
         .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(
             a ->

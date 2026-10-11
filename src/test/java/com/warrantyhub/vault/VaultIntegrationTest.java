@@ -368,6 +368,129 @@ class VaultIntegrationTest {
   }
 
   @Test
+  void profileAndPasswordChangeRevokesOldSessions() throws Exception {
+    String token = register();
+    var profile =
+        json.readTree(
+            mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    String email = profile.get("email").asText();
+    mvc.perform(
+            put("/api/auth/me")
+                .header("Authorization", "Bearer " + token)
+                .contentType("application/json")
+                .content("{\"name\":\"Updated name\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.name").value("Updated name"));
+    mvc.perform(
+            put("/api/auth/password")
+                .header("Authorization", "Bearer " + token)
+                .contentType("application/json")
+                .content(
+                    json.writeValueAsString(
+                        Map.of(
+                            "currentPassword",
+                            "wrong-password",
+                            "newPassword",
+                            "new-long-password"))))
+        .andExpect(status().isBadRequest());
+    mvc.perform(get("/api/products").header("Authorization", "Bearer " + token))
+        .andExpect(status().isOk());
+    long id = create(token);
+    String fresh =
+        json.readTree(
+                mvc.perform(
+                        put("/api/auth/password")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType("application/json")
+                            .content(
+                                json.writeValueAsString(
+                                    Map.of(
+                                        "currentPassword",
+                                        "long-test-password",
+                                        "newPassword",
+                                        "new-long-password"))))
+                    .andExpect(status().isOk())
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString())
+            .get("token")
+            .asText();
+    mvc.perform(get("/api/products").header("Authorization", "Bearer " + token))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/products/" + id).header("Authorization", "Bearer " + fresh))
+        .andExpect(status().isOk());
+    mvc.perform(
+            post("/api/auth/login")
+                .contentType("application/json")
+                .content(
+                    json.writeValueAsString(
+                        Map.of("email", email, "password", "long-test-password"))))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            post("/api/auth/login")
+                .contentType("application/json")
+                .content(
+                    json.writeValueAsString(
+                        Map.of("email", email, "password", "new-long-password"))))
+        .andExpect(status().isOk());
+  }
+
+  @Test
+  void longUnicodePasswordsAndMalformedDatesReturnBadRequest() throws Exception {
+    mvc.perform(
+            post("/api/auth/login")
+                .contentType("application/json")
+                .content(
+                    json.writeValueAsString(
+                        Map.of("email", "test@example.com", "password", "é".repeat(40)))))
+        .andExpect(status().isBadRequest());
+    String token = register();
+    var input = product();
+    input.put("purchaseDate", "invalid-date");
+    mvc.perform(
+            post("/api/products")
+                .header("Authorization", "Bearer " + token)
+                .contentType("application/json")
+                .content(json.writeValueAsString(input)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").exists());
+  }
+
+  @Test
+  void databaseUpgradePreservesExistingData() throws Exception {
+    String url =
+        "jdbc:h2:mem:upgrade"
+            + UUID.randomUUID()
+            + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1";
+    org.flywaydb.core.Flyway.configure().dataSource(url, "sa", "").target("1").load().migrate();
+    try (var c = java.sql.DriverManager.getConnection(url, "sa", "");
+        var statement = c.createStatement()) {
+      statement.execute(
+          "INSERT INTO accounts (name,email,password_hash) VALUES ('Existing"
+              + " user','existing@example.com','hash')");
+      statement.execute(
+          "INSERT INTO products"
+              + " (owner_id,product_name,brand,category,store,price,purchase_date,warranty_months)"
+              + " VALUES (1,'Existing product','Brand','Category','Store',12.50,'2020-01-01',12)");
+    }
+    org.flywaydb.core.Flyway.configure().dataSource(url, "sa", "").load().migrate();
+    try (var c = java.sql.DriverManager.getConnection(url, "sa", "");
+        var statement = c.createStatement();
+        var rows =
+            statement.executeQuery(
+                "SELECT a.token_version, p.product_name FROM accounts a JOIN products p ON"
+                    + " p.owner_id=a.id")) {
+      assertTrue(rows.next());
+      assertEquals(0, rows.getLong(1));
+      assertEquals("Existing product", rows.getString(2));
+    }
+  }
+
+  @Test
   void leapYearsAndInclusiveExpiry() {
     assertEquals(LocalDate.of(2025, 2, 28), WarrantyDates.expiry(LocalDate.of(2024, 2, 29), 12));
     assertEquals(LocalDate.of(2026, 2, 28), WarrantyDates.expiry(LocalDate.of(2026, 1, 31), 1));

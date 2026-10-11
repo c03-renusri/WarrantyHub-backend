@@ -22,9 +22,10 @@ public class AuthRateLimit extends OncePerRequestFilter {
 
   @Override
   protected boolean shouldNotFilter(HttpServletRequest r) {
-    return !r.getMethod().equals("POST")
+    return !(r.getMethod().equals("POST") || r.getMethod().equals("PUT"))
         || !(r.getRequestURI().equals("/api/auth/login")
-            || r.getRequestURI().equals("/api/auth/register"));
+            || r.getRequestURI().equals("/api/auth/register")
+            || r.getRequestURI().equals("/api/auth/password"));
   }
 
   @Override

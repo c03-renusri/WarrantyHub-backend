@@ -17,4 +17,7 @@ public class Account {
 
   @Column(nullable = false)
   public String passwordHash;
+
+  @Column(nullable = false)
+  public long tokenVersion;
 }

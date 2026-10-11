@@ -18,11 +18,13 @@ public class AuthController {
   private final AccountRepository accounts;
   private final PasswordEncoder passwords;
   private final JwtEncoder encoder;
+  private final String dummyHash;
 
   public AuthController(AccountRepository a, PasswordEncoder p, JwtEncoder e) {
     accounts = a;
     passwords = p;
     encoder = e;
+    dummyHash = passwords.encode(UUID.randomUUID().toString());
   }
 
   public record Registration(
@@ -53,14 +55,10 @@ public class AuthController {
 
   @PostMapping("/login")
   public Map<String, Object> login(@Valid @RequestBody Login r) {
-    var a =
-        accounts
-            .findByEmail(normalized(r.email()))
-            .orElseThrow(
-                () ->
-                    new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED, "Invalid email or password"));
-    if (!passwords.matches(r.password(), a.passwordHash))
+    checkPasswordBytes(r.password());
+    var a = accounts.findByEmail(normalized(r.email())).orElse(null);
+    boolean matches = passwords.matches(r.password(), a == null ? dummyHash : a.passwordHash);
+    if (a == null || !matches)
       throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or password");
     return session(a);
   }
@@ -73,6 +71,48 @@ public class AuthController {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED)));
   }
 
+  public record ProfileInput(@NotBlank @Size(max = 100) String name) {}
+
+  public record PasswordInput(
+      @NotBlank @Size(max = 72) String currentPassword,
+      @NotBlank @Size(min = 10, max = 72) String newPassword) {}
+
+  @PutMapping("/me")
+  @org.springframework.transaction.annotation.Transactional
+  public Map<String, Object> updateProfile(
+      @Valid @RequestBody ProfileInput input, @AuthenticationPrincipal Jwt jwt) {
+    Account account =
+        accounts
+            .lockById(Long.valueOf(jwt.getSubject()))
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+    account.name = input.name().trim();
+    return profile(accounts.saveAndFlush(account));
+  }
+
+  @PutMapping("/password")
+  @org.springframework.transaction.annotation.Transactional
+  public Map<String, Object> changePassword(
+      @Valid @RequestBody PasswordInput input, @AuthenticationPrincipal Jwt jwt) {
+    checkPasswordBytes(input.currentPassword());
+    checkPasswordBytes(input.newPassword());
+    Account account =
+        accounts
+            .lockById(Long.valueOf(jwt.getSubject()))
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+    if (!passwords.matches(input.currentPassword(), account.passwordHash))
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Current password is incorrect");
+    if (passwords.matches(input.newPassword(), account.passwordHash))
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a different new password");
+    account.passwordHash = passwords.encode(input.newPassword());
+    account.tokenVersion++;
+    return session(accounts.saveAndFlush(account));
+  }
+
+  private void checkPasswordBytes(String value) {
+    if (value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72)
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password exceeds 72 UTF-8 bytes");
+  }
+
   private Map<String, Object> profile(Account a) {
     return Map.of("id", a.id, "name", a.name, "email", a.email);
   }
@@ -83,6 +123,7 @@ public class AuthController {
         JwtClaimsSet.builder()
             .issuer("warrantyhub-vault")
             .subject(a.id.toString())
+            .claim("version", a.tokenVersion)
             .issuedAt(now)
             .expiresAt(now.plusSeconds(3600))
             .build();
